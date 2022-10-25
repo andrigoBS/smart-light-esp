@@ -3,7 +3,7 @@
 Dependencies:
 - Arduino IDE
 - Esp32 DEVKIT v1 DOIT
-- Smart Light React Native
+- [Smart Light React Native](https://github.com/andrigoBS/smart-light-native)
 - Set wifi connection
 
 
