@@ -1,160 +1,45 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ArduinoJson.h>
 #include <ESPDateTime.h>
+#include "wifi/WifiLight.cpp"
+#include "web/WebLight.cpp"
 
-#define LDR 35
-#define LED 12
-#define SENSOR 13
+#define LDR  35 // sensor de luminosidade
+#define MOV  13 // sensor de movimento
+#define LED1 12 // led um
+#define BT1  27 // botão um
+#define LED2 32 // led dois
+#define BT2  26 // botão dois
+#define POW  33 // potenciometro
 #define PWM1_Ch 0
 #define PWM1_Res 12
 #define PWM1_Freq 1024
+#define PWM2_Ch 1
+#define PWM2_Res 12
+#define PWM2_Freq 1024
 
-// variaveis do sistema
-long lastOnIn = 0;
-StaticJsonDocument<150> jsonDocument;
-char buffer[150];
-String body = "";
+WifiLight wifiLight;
+LightList* lightList = new LightList();
 unsigned short int nowMinutes = 0;
-unsigned short int offTimeStart = 0;
-unsigned short int offTimeEnd = 0;
-
-// variaveis do usuario
-short int offHoursStart = -1;
-short int offMinutesStart = -1;
-short int offHoursEnd = -1;
-short int offMinutesEnd = -1;
-unsigned short int maxBrightness = 100;
-unsigned short int minBrightness = 12;
-bool lightOn = true;
-bool autoOn = true;
-unsigned int maxOnTime = 5000;
-char* ssid = "WIFI-NOME";      
-char* password = "WIFI-PASSWORD"; 
-
-WebServer server(80);
-
-void getBrightness(){
-  jsonDocument.clear(); 
-  jsonDocument["minBrightness"] = minBrightness;
-  jsonDocument["maxBrightness"] = maxBrightness;
-  serializeJson(jsonDocument, buffer);
-  server.send(200, "application/json", buffer);
-}
-
-void postBrightness() {
-  body = server.arg("plain");
-  deserializeJson(jsonDocument, body);
-  minBrightness = jsonDocument["minBrightness"];
-  maxBrightness = jsonDocument["maxBrightness"];
-  server.send(200, "application/json", "{\"success\": \"OK\"}");
-}
-
-void requestBrightness(){
-   if (server.method() == HTTP_GET){
-      getBrightness();
-      return;
-   }
-   if(server.method() == HTTP_POST){
-      postBrightness();
-      return;
-   }
-}
-
-void getLight(){
-  jsonDocument.clear();  
-  jsonDocument["lightOn"] = lightOn;
-  jsonDocument["autoOn"] = autoOn;
-  jsonDocument["maxOnTime"] = maxOnTime;
-  serializeJson(jsonDocument, buffer);
-  server.send(200, "application/json", buffer);
-}
-
-void postLightOn() {
-  body = server.arg("plain");
-  deserializeJson(jsonDocument, body);
-  lightOn = jsonDocument["lightOn"];
-  server.send(200, "application/json", "{\"success\": \"OK\"}");
-}
-
-void postAutoOn() {
-  body = server.arg("plain");
-  deserializeJson(jsonDocument, body);
-  autoOn = jsonDocument["autoOn"];
-  server.send(200, "application/json", "{\"success\": \"OK\"}");
-}
-
-void postMaxOnTime() {
-  body = server.arg("plain");
-  deserializeJson(jsonDocument, body);
-  maxOnTime = jsonDocument["maxOnTime"];
-  server.send(200, "application/json", "{\"success\": \"OK\"}");
-}
-
-void getOffTime(){
-  jsonDocument.clear(); 
-  jsonDocument["offHoursStart"] = offHoursStart;
-  jsonDocument["offMinutesStart"] = offMinutesStart;
-  jsonDocument["offHoursEnd"] = offHoursEnd;
-  jsonDocument["offMinutesEnd"] = offMinutesEnd;
-  serializeJson(jsonDocument, buffer);
-  server.send(200, "application/json", buffer);
-}
-
-void postOffTime() {
-  body = server.arg("plain");
-  deserializeJson(jsonDocument, body);
-  Serial.println(body);
-  offHoursStart = jsonDocument["offHoursStart"];
-  offMinutesStart = jsonDocument["offMinutesStart"];
-  offHoursEnd = jsonDocument["offHoursEnd"];
-  offMinutesEnd = jsonDocument["offMinutesEnd"];
-  server.send(200, "application/json", "{\"success\": \"OK\"}");
-}
-
-void requestOffTime(){
-   if (server.method() == HTTP_GET){
-      getOffTime();
-      return;
-   }
-   if(server.method() == HTTP_POST){
-      postOffTime();
-      return;
-   }
-}
-
-void setupServerRoutes() {         
-  server.on("/brightness", requestBrightness);      
-  server.on("/light", getLight);
-  server.on("/light-on", postLightOn);
-  server.on("/auto-on", postAutoOn);
-  server.on("/max-on-time", postMaxOnTime);
-  server.on("/off-time", requestOffTime);
-  server.begin();    
-}
+unsigned short int timeStart = 0;
+unsigned short int timeEnd = 0;
 
 void setup() {
   Serial.begin(115200);
-  
-  pinMode(LED, OUTPUT);
-  pinMode(SENSOR, INPUT);
 
-  ledcAttachPin(LED, PWM1_Ch);
+  pinMode(LED1, OUTPUT);
+  ledcAttachPin(LED1, PWM1_Ch);
   ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
 
-  while (WiFi.status() != WL_CONNECTED){
-    WiFi.begin(ssid, password);
-    for (unsigned short int retries = 0; retries < 10; retries++) {
-        delay(500);
-        Serial.print(".");
-        if(WiFi.status() == WL_CONNECTED) break;
-    }
-  }
+  pinMode(LED2, OUTPUT);
+  ledcAttachPin(LED2, PWM2_Ch);
+  ledcSetup(PWM2_Ch, PWM2_Freq, PWM2_Res);
+  
+  pinMode(MOV, INPUT);
 
-  Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  pinMode(BT1, INPUT_PULLUP);
+  pinMode(BT2, INPUT_PULLUP);
+
+  wifiLight.setup();
 
   DateTime.setTimeZone("<-03>3");
   DateTime.begin();
@@ -162,45 +47,70 @@ void setup() {
     Serial.println("Failed to get time from server.");
   }
   
-  setupServerRoutes();
+  WebLightSetup(lightList);
 }
 
 void loop() {
-  server.handleClient();
+  WebLightListen();
 
   unsigned int ldrValue = analogRead(LDR);
 
-  if(ldrValue > maxBrightness * (4096.0/100)){
-    ldrValue = maxBrightness * (4096.0/100);
+  if(ldrValue > lightList->getMaxBrightness() * (4096.0/100)){
+    ldrValue = lightList->getMaxBrightness() * (4096.0/100);
   }
 
-  if(autoOn) {
-    if(ldrValue < minBrightness * (4096.0/100)){
-      ldrValue = 0;
-    }
-  
-    if (digitalRead(SENSOR) == HIGH) {  
-      lastOnIn = millis();
-    }else{
-      if(millis() - lastOnIn > maxOnTime){
-          ldrValue = 0;
-      }
-    }
-
-    if(offHoursStart != -1 && offMinutesStart != -1 && offHoursEnd != -1 && offMinutesEnd != -1){
-      nowMinutes = DateTime.getParts().getHours() * 60 + DateTime.getParts().getMinutes();
-      offTimeStart = offHoursStart * 60 + offMinutesStart;
-      offTimeEnd = offHoursEnd * 60 + offMinutesEnd;
-     
-      if(nowMinutes > offTimeStart && nowMinutes < offTimeEnd){
+  for(short int i = 0; i < lightList->getNumOfLamps(); i++) {
+    if(lightList->getLight(i)->getAutoOn()){
+      if(ldrValue < lightList->getMinBrightness() * (4096.0/100)){
         ldrValue = 0;
       }
+
+      if (digitalRead(MOV) == HIGH) {  
+        lightList->getLight(i)->setLastOnIn(millis());
+      }else{
+        if(millis() - lightList->getLight(i)->getLastOnIn() > lightList->getMaxOnTime()){
+            ldrValue = 0;
+        }
+      }
+
+      nowMinutes = DateTime.getParts().getHours() * 60 + DateTime.getParts().getMinutes();
+      for(short int j = 0; j < lightList->getLight(i)->getOffHours()->getSize(); j++) {
+        timeStart = lightList->getLight(i)->getOffHours()->getHour(j)->getHoursStart() * 60 + 
+                    lightList->getLight(i)->getOffHours()->getHour(j)->getMinutesStart()
+        ;
+        timeEnd = lightList->getLight(i)->getOffHours()->getHour(j)->getHoursEnd() * 60 + 
+                  lightList->getLight(i)->getOffHours()->getHour(j)->getMinutesEnd()
+        ;
+        if(nowMinutes > timeStart && nowMinutes < timeEnd){
+          ldrValue = 0;
+        }
+      }
+
+      for(short int j = 0; j < lightList->getLight(i)->getOnHours()->getSize(); j++) {
+        timeStart = lightList->getLight(i)->getOnHours()->getHour(j)->getHoursStart() * 60 + 
+                    lightList->getLight(i)->getOnHours()->getHour(j)->getMinutesStart()
+        ;
+        timeEnd = lightList->getLight(i)->getOnHours()->getHour(j)->getHoursEnd() * 60 + 
+                  lightList->getLight(i)->getOnHours()->getHour(j)->getMinutesEnd()
+        ;
+        if(nowMinutes > timeStart && nowMinutes < timeEnd){
+          ldrValue = analogRead(LDR);
+
+          if(ldrValue > lightList->getMaxBrightness() * (4096.0/100)){
+            ldrValue = lightList->getMaxBrightness() * (4096.0/100);
+          }
+        }
+      }
+    }else{
+      if(!lightList->getLight(i)->getLightOn() || (i == 0 && !digitalRead(BT1)) || (i == 1 && !digitalRead(BT2))){
+        ldrValue = 0;
+      } 
     }
-  }else{
-    if(!lightOn){
-      ldrValue = 0;
-    } 
+    
+    if(i == 0) {
+      ledcWrite(PWM1_Ch, ldrValue);
+    }else {
+      ledcWrite(PWM2_Ch, ldrValue);
+    }
   }
-  
-  ledcWrite(PWM1_Ch, ldrValue);
 }
